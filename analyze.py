@@ -1,79 +1,133 @@
+#!/usr/bin/env python3
+"""
+Same-rider detection (feature-friendly version)
+──────────────────────────────────────────────
+• Trains novelty models (One-Class SVM, Isolation Forest) on laps 1-4.
+• Evaluates every sample in lap 5:  +1 = looks like the same rider, −1 = not.
+
+Feature list lives in `FEATURE_KEYS` – add keys there and re-run.
+Nested JSON paths use dot notation, e.g.   "userAccel.x".
+"""
+
+# ──────────────── standard imports ────────────────
 import json
-import os
-import glob
-import numpy as np
+from pathlib import Path
+from typing import Dict, Any, List
+
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.svm import SVC
-from sklearn.metrics import accuracy_score, f1_score
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import OneClassSVM
+from sklearn.ensemble import IsolationForest
 
-# Define directory and load lap files
-lap_directory = "./Segmented/P01"
-lap_files = sorted(glob.glob(f"{lap_directory}/lap_*.json"))
+# ─────────────── editable knobs ───────────────
+LAP_DIR       = "./Segmented/P02"
+TRAIN_LAPS    = (1, 2, 3, 4)
+TEST_LAP      = 5
 
-# Ensure we have at least 5 laps
-if len(lap_files) < 5:
-    raise ValueError("Not enough laps available. At least 5 laps are required.")
+NU            = 0.05   # One-Class SVM  – expected outlier frac in *training*
+CONTAMINATION = 0.05   # IsolationForest – expected outlier frac in *training*
 
-# Load each lap separately
-laps = []
-for lap_file in lap_files:
-    with open(lap_file, "r") as file:
-        laps.append(json.load(file))
+FEATURE_KEYS: List[str] = [
+    "rel_time",          # ← generated automatically, always available
+    # "brakeData",
+    # add more keys whenever you like:
+    # "cadence",
+    # "pedalWeight.L",
+    # "pedalWeight.R",
+    "userAccel.x",
+    "userAccel.y",
+    "userAccel.z",
+]
 
-# Extract Brake Data and Time
-def extract_brake_data(lap_data):
-    brake_data = []
-    for entry in lap_data:
-        brake_value = float(entry["brakeData"])
-        timestamp = float(entry["unixTimeStamp"])
-        participant_id = entry.get("PID", "P01")  
-        brake_data.append([timestamp, brake_value, participant_id])
-    return pd.DataFrame(brake_data, columns=["timestamp", "brake_value", "participant_id"])
+# ──────────── JSON-flatten helper ────────────
+def _flatten(d: Dict[str, Any], parent: str = "", sep: str = ".") -> Dict[str, Any]:
+    out = {}
+    for k, v in d.items():
+        key = f"{parent}{sep}{k}" if parent else k
+        if isinstance(v, dict):
+            out.update(_flatten(v, key, sep))
+        else:
+            out[key] = v
+    return out
 
-# Use laps 1-4 for training and lap 5 for testing
-train_laps = laps[:4]
-test_lap = laps[4]
+# ── convert **one** record to Series ──
+def _record_to_series(rec: Dict[str, Any]) -> pd.Series:
+    flat = _flatten(rec)
+    flat["rel_time"] = float(rec["unixTimeStamp"]) - _record_to_series.t0
+    return pd.Series(flat, dtype="object")
 
-# Convert to DataFrame
-df_train = pd.concat([extract_brake_data(lap) for lap in train_laps], ignore_index=True)
-df_test = extract_brake_data(test_lap)
+_record_to_series.t0 = 0.0  # will be set per-lap
 
-# Encode participant IDs
-df_train["participant_id"] = df_train["participant_id"].astype("category").cat.codes
-df_test["participant_id"] = df_test["participant_id"].astype("category").cat.codes
+# ─────────────── I/O helpers ───────────────
+def lap_path(idx: int) -> Path:
+    return Path(LAP_DIR) / f"lap_{idx}.json"
 
-# Define features (X) and labels (y)
-X_train = df_train[["timestamp", "brake_value"]]
-y_train = df_train["participant_id"]
-X_test = df_test[["timestamp", "brake_value"]]
-y_test = df_test["participant_id"]
+def load_lap(idx: int) -> pd.DataFrame:
+    path = lap_path(idx)
+    with open(path) as fp:
+        recs = json.load(fp)
+    if not recs:
+        raise ValueError(f"{path} is empty")
 
-# Initialize models
-rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
-svm_model = SVC(kernel='linear', random_state=42)
+    _record_to_series.t0 = float(recs[0]["unixTimeStamp"])
+    df = pd.DataFrame(_record_to_series(r) for r in recs)
 
-# Train models
-rf_model.fit(X_train, y_train)
-# svm_model.fit(X_train, y_train)
+    # keep only requested feature cols that actually exist
+    present = [k for k in FEATURE_KEYS if k in df.columns]
+    return df[present].apply(pd.to_numeric, errors="coerce")  # convert to float / NaN
 
-# Predict
-rf_preds = rf_model.predict(X_test)
-# svm_preds = svm_model.predict(X_test)
+def build_train_test():
+    # concatenate laps 1-4
+    train_df = pd.concat([load_lap(i) for i in TRAIN_LAPS], ignore_index=True)
+    test_df  = load_lap(TEST_LAP)
 
-# Evaluate models
-rf_accuracy = accuracy_score(y_test, rf_preds)
-rf_f1 = f1_score(y_test, rf_preds, average='weighted')
-# svm_accuracy = accuracy_score(y_test, svm_preds)
-# svm_f1 = f1_score(y_test, svm_preds, average='weighted')
+    # fill NaNs with column means (computed on training set)
+    means = train_df.mean(numeric_only=True)
+    train_df = train_df.fillna(means)
+    test_df  = test_df.fillna(means)          # use *training* means!
 
-# Print results
-print("Random Forest Accuracy:", rf_accuracy)
-print("Random Forest F1 Score:", rf_f1)
-# print("SVM Accuracy:", svm_accuracy)
-# print("SVM F1 Score:", svm_f1)
+    scaler  = StandardScaler().fit(train_df.values)
+    X_train = scaler.transform(train_df.values)
+    X_test  = scaler.transform(test_df.values)
+    return X_train, X_test
 
-# CURRENT RESULT
-# Random Forest Accuracy: 1.0
-# Random Forest F1 Score: 1.0
-# Note segmented is not correct
+# ──────────── fit both novelty models ────────────
+def fit_models(X_train):
+    ocsvm = OneClassSVM(kernel="rbf", nu=NU, gamma="scale").fit(X_train)
+    iso   = IsolationForest(
+        n_estimators=200,
+        contamination=CONTAMINATION,
+        random_state=42,
+    ).fit(X_train)
+    return ocsvm, iso
+
+# ───────────── main routine ─────────────
+def main():
+    # check files exist
+    missing = [i for i in (*TRAIN_LAPS, TEST_LAP) if not lap_path(i).exists()]
+    if missing:
+        raise SystemExit("Missing lap files: " + ", ".join(str(i) for i in missing))
+
+    X_train, X_test = build_train_test()
+    ocsvm, iso = fit_models(X_train)
+
+    oc_ratio  = (ocsvm.predict(X_test) == 1).mean()
+    iso_ratio = (iso.predict(X_test)   == 1).mean()
+
+    print("\nSame-rider detection on lap 5")
+    print("─" * 50)
+    print(f"One-Class SVM    inlier ratio : {oc_ratio :.3f}")
+    print(f"IsolationForest  inlier ratio : {iso_ratio:.3f}")
+
+    def verdict(r: float) -> str:
+        return "✅  lap 5 matches SAME rider" if r >= 0.95 else \
+               "⚠︎  lap 5 may NOT be same rider"
+    print("\nVerdicts")
+    print("OC-SVM :", verdict(oc_ratio))
+    print("IsoFor :", verdict(iso_ratio))
+
+    print("\nFeatures actually used:", ", ".join(FEATURE_KEYS))
+
+if __name__ == "__main__":
+    main()

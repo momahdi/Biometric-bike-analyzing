@@ -5,7 +5,7 @@ def plot_lap(file_path, output_file):
     with open(file_path, "r") as file:
         data = json.load(file)
         
-    lap_data = data["timestamps"]
+    lap_data = data
     # Extract latitude and longitude
     latitudes = [float(entry["locationData"]["latitude"]) for entry in lap_data]
     longitudes = [float(entry["locationData"]["longitude"]) for entry in lap_data]
@@ -38,5 +38,5 @@ def plot_lap(file_path, output_file):
     print(f"Map saved: {output_file}")
 
 
-plot_lap("./Unsegmented/P01/2024-12-10_123330-logfile-subject-P01_B.json", "lap_1_map.html")  
+plot_lap("./Segmented/P01/lap_5.json", "lap_1_map.html")
 

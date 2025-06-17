@@ -85,8 +85,10 @@ def build_train_test():
     # fill NaNs with column means (computed on training set)
     means = train_df.mean(numeric_only=True)
     train_df = train_df.fillna(means)
-    test_df  = test_df.fillna(means)          # use *training* means!
+    test_df  = test_df.fillna(means)     
 
+    #  Standardize (normalize) the data so all features have the same scale. 
+    #  For example, acceleration in meters/sec² and time in seconds are on very different scales
     scaler  = StandardScaler().fit(train_df.values)
     X_train = scaler.transform(train_df.values)
     X_test  = scaler.transform(test_df.values)
@@ -112,6 +114,9 @@ def main():
     X_train, X_test = build_train_test()
     ocsvm, iso = fit_models(X_train)
 
+
+   # How many predictions are "inliers" and take the average 
+   # E.g., if 0.97, then 97% of lap 5 looks like the same rider.
     oc_ratio  = (ocsvm.predict(X_test) == 1).mean()
     iso_ratio = (iso.predict(X_test)   == 1).mean()
 

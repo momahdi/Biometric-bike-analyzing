@@ -33,8 +33,11 @@ def now() -> float:
 
 
 # ─────────────────── configuration ──────────────────────────────────────────
-BASE_DIR     = Path("./Segmented")
-PARTICIPANTS = [f"P{str(i).zfill(2)}" for i in range(1, 16)]          # P01…P15
+BASE_DIR     = Path("./Segmented/Day1")
+PARTICIPANTS = [
+    "P01", "P02", "P03", "P04", "P05", "P06", "P07",
+    "P09", "P10", "P11", "P12", "P13", "P14", "P15", "P16",
+] # P01…P15       # P01…P15
 
 FOLDS = [([1, 2, 3, 4], 5),
          ([2, 3, 4, 5], 1),

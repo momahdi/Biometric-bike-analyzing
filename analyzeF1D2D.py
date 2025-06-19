@@ -45,7 +45,10 @@ ROOT_DIR   = Path("./Segmented")   # root data folder
 TRAIN_DAY  = "Day1"                # sub-folder used for training
 TEST_DAY   = "Day2"                # sub-folder used for testing
 
-PARTICIPANTS = [f"P{str(i).zfill(2)}" for i in range(1, 16)]  # P01…P15
+PARTICIPANTS = [
+    "P01", "P02", "P03", "P04", "P05", "P06", "P07",
+    "P09", "P10", "P11", "P12", "P13", "P14", "P15", "P16",
+] # P01…P15
 LAPS         = range(1, 6)                                   # laps 1-5
 
 FEATURES = [

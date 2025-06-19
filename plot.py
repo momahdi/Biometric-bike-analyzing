@@ -10,8 +10,8 @@ import folium
 # ────────────────────────────────────────────────────────────────────────────
 # Configuration – adjust only if your folder names change
 # ────────────────────────────────────────────────────────────────────────────
-SEGMENTED_ROOT = Path("./Segmented")  # where P01 … P15 live
-PARTICIPANTS   = range(1, 16)         # P01 … P15
+SEGMENTED_ROOT = Path("./Segmented/Day1")  # where P01 … P15 live
+PARTICIPANTS = [p for p in range(1, 17) if p != 8]     # P01 … P16
 LAP_PATTERN    = "lap_*.json"         # match all lap files
 
 # ────────────────────────────────────────────────────────────────────────────

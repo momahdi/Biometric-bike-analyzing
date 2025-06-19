@@ -17,7 +17,7 @@ OUTPUT_DIR = Path("./Segmented/P01")
 
 # ─────────── NEW: batch-mode parameters (leave the two lines above untouched) ─
 RUN_BATCH         = True                    # False ⇒ original single-file mode
-PARTICIPANTS      = range(1, 16)            # P01 … P15
+PARTICIPANTS      = [p for p in range(1, 17) if p != 8]     # P01 … P15
 UNSEGMENTED_ROOT  = Path("./Unsegmented/Day1/Track-B")
 SEGMENTED_ROOT    = Path("./Segmented")
 # ──────────────────────────────────────────────────────────────────────────────

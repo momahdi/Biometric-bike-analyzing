@@ -38,5 +38,5 @@ def plot_lap(file_path, output_file):
     print(f"Map saved: {output_file}")
 
 
-plot_lap("./Unsegmented/Day1/Track-B/P05/2025-02-03_111950-logfile-subject-P05_B.json", "lap_1_map.html")
+plot_lap("./Unsegmented/2025-04-08 131003-logfile-subject-P13_B_2.json", "lap_1_map.html")
 

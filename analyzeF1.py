@@ -1,58 +1,59 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Five-fold rider-ID model with brake + acceleration features,
-side-by-side F1 tables, and an overall confusion-matrix plot.
+Five-fold rider-ID model
+
+•  brake + acceleration features  (timestamp removed)
+•  per-fold and averaged Precision / Recall / F1
+•  raw confusion-matrix plot
+•  Random-Forest feature importance for **every fold** + mean column
 """
 
 import json, time
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (
-    f1_score,
-    confusion_matrix,
-    ConfusionMatrixDisplay,
+    precision_score, recall_score, f1_score,
+    confusion_matrix, ConfusionMatrixDisplay,
 )
 from sklearn.preprocessing import LabelEncoder
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import make_pipeline
 
 
-# ───────────────────────── stopwatch ────────────────────────────────────────
+# ─────────────────── stopwatch ──────────────────────────────────────────────
 def now() -> float:
     if not hasattr(now, "_t0"):
         now._t0 = time.perf_counter()
     return time.perf_counter() - now._t0
 
 
-# ─────────────────────── configuration section ──────────────────────────────
-BASE_DIR     = Path("./Segmented")                     # root folder of laps
-PARTICIPANTS = [f"P{str(i).zfill(2)}" for i in range(1, 16)]   # P01 … P15
+# ─────────────────── configuration ──────────────────────────────────────────
+BASE_DIR     = Path("./Segmented")
+PARTICIPANTS = [f"P{str(i).zfill(2)}" for i in range(1, 16)]          # P01…P15
 
 FOLDS = [([1, 2, 3, 4], 5),
          ([2, 3, 4, 5], 1),
          ([3, 4, 5, 1], 2),
          ([4, 5, 1, 2], 3),
          ([5, 1, 2, 3], 4)]
-
 FOLD_NAMES = [f"F{idx}" for idx in range(1, len(FOLDS) + 1)]
 
-FEATURES = ["timestamp", "brake_value",
-            "accel_x", "accel_y", "accel_z", "accel_mag"]
+FEATURES = [
+    "brake_value",
+    "accel_x", "accel_y", "accel_z",
+    "accel_mag",
+]
 
 
-# ───────────────────────── helper functions ─────────────────────────────────
+# ─────────────────── helpers ────────────────────────────────────────────────
 def to_float(x):
-    """Return float(x) or np.nan if empty / invalid."""
-    try:
-        return float(x)
-    except (TypeError, ValueError):
-        return np.nan
+    try:           return float(x)
+    except Exception: return np.nan
 
 
 def load_lap_json(pid: str, lap: int):
@@ -61,39 +62,27 @@ def load_lap_json(pid: str, lap: int):
 
 
 def lap_to_df(lap_data, pid):
-    """
-    Convert one lap (list of dicts) to a DataFrame with:
-
-      • timestamp
-      • brake_value
-      • accel_(x|y|z)
-      • accel_mag = √(x² + y² + z²)
-    """
+    """Flatten one lap to a DataFrame (brake + accel)."""
     rows = []
     for d in lap_data:
-        acc_src = d.get("userAccel") or d.get("acceleration") or {}
-        ax = to_float(acc_src.get("x"))
-        ay = to_float(acc_src.get("y"))
-        az = to_float(acc_src.get("z"))
-
+        acc = d.get("userAccel") or d.get("acceleration") or {}
+        ax, ay, az = map(to_float, (acc.get("x"), acc.get("y"), acc.get("z")))
         rows.append(
-            {
-                "timestamp"   : to_float(d.get("unixTimeStamp")),
-                "brake_value" : to_float(d.get("brakeData")),
-                "accel_x"     : ax,
-                "accel_y"     : ay,
-                "accel_z"     : az,
-                "accel_mag"   : np.sqrt(ax**2 + ay**2 + az**2)
-                                if not np.isnan(ax) and not np.isnan(ay) and not np.isnan(az)
-                                else np.nan,
-                "participant_id": pid,
-            }
+            dict(
+                brake_value = to_float(d.get("brakeData")),
+                accel_x     = ax,
+                accel_y     = ay,
+                accel_z     = az,
+                accel_mag   = np.sqrt(ax**2 + ay**2 + az**2)
+                              if not np.isnan(ax) and not np.isnan(ay) and not np.isnan(az)
+                              else np.nan,
+                participant_id = pid,
+            )
         )
     return pd.DataFrame(rows)
 
 
 def build(train_laps, test_lap):
-    """Return train_df, test_df for one fold."""
     tr, te = [], []
     for pid in PARTICIPANTS:
         for lp in train_laps:
@@ -102,88 +91,102 @@ def build(train_laps, test_lap):
     return pd.concat(tr, ignore_index=True), pd.concat(te, ignore_index=True)
 
 
-def encode(train_df, test_df):
-    le = LabelEncoder().fit(train_df["participant_id"])
-    train_df["pid_code"] = le.transform(train_df["participant_id"])
-    test_df ["pid_code"] = le.transform(test_df["participant_id"])
-    return train_df, test_df, le
+def encode(tr_df, te_df):
+    le = LabelEncoder().fit(tr_df["participant_id"])
+    tr_df["pid_code"] = le.transform(tr_df["participant_id"])
+    te_df["pid_code"] = le.transform(te_df["participant_id"])
+    return tr_df, te_df, le
 
 
 def fit_rf(X, y):
-    """Pipeline: impute NaNs → Random-Forest."""
     rf = RandomForestClassifier(n_estimators=300, n_jobs=-1, random_state=42)
     return make_pipeline(SimpleImputer(strategy="median"), rf).fit(X, y)
 
 
-def f1_per_pid(y_true, y_pred, le):
-    return {name: f1_score(y_true == code, y_pred == code,
-                           average="binary", zero_division=0)
-            for code, name in enumerate(le.classes_)}
-
-
-# ─────────────────────────────── main ────────────────────────────────────────
+# ─────────────────── main ───────────────────────────────────────────────────
 def main():
     print(f"[{now():6.2f}s] ===== START =====")
+    print("Features used:", FEATURES)
 
-    # containers for tables & confusion matrix
-    pid_history       = {pid: [] for pid in PARTICIPANTS}
-    macro_scores, weighted_scores = [], []
+    pid_hist = {p: [] for p in PARTICIPANTS}
+    macro, weighted = [], []
     y_true_all, y_pred_all = [], []
+    importances = []             # store per-fold feature importances
 
-    for fold_idx, (train_laps, test_lap) in enumerate(FOLDS, 1):
-        print(f"\n[{now():6.2f}s] --- Fold {fold_idx} | train {train_laps}  test {test_lap} ---")
+    for k, (tr_laps, te_lap) in enumerate(FOLDS, 1):
+        print(f"\n[{now():6.2f}s] --- Fold {k} | train {tr_laps}  test {te_lap} ---")
         t0 = now()
 
-        train_df, test_df = build(train_laps, test_lap)
-        train_df, test_df, le = encode(train_df, test_df)
+        tr_df, te_df = build(tr_laps, te_lap)
+        tr_df, te_df, le = encode(tr_df, te_df)
 
-        Xtr = train_df[FEATURES].astype(np.float64).replace([np.inf, -np.inf], np.nan)
-        ytr = train_df["pid_code"]
-        Xte = test_df [FEATURES].astype(np.float64).replace([np.inf, -np.inf], np.nan)
-        yte = test_df ["pid_code"]
+        Xtr, ytr = tr_df[FEATURES].astype(float), tr_df["pid_code"]
+        Xte, yte = te_df[FEATURES].astype(float), te_df["pid_code"]
 
-        model = fit_rf(Xtr, ytr)
-        preds = model.predict(Xte)
+        model  = fit_rf(Xtr, ytr)
+        preds  = model.predict(Xte)
 
-        per_pid   = f1_per_pid(yte, preds, le)
-        macro_f1  = f1_score(yte, preds, average="macro")
-        weight_f1 = f1_score(yte, preds, average="weighted")
+        # pull RF estimator out of pipeline & store fold-level importances
+        importances.append(model.named_steps["randomforestclassifier"].feature_importances_)
 
-        for pid, sc in per_pid.items():
-            pid_history[pid].append(sc)
-        macro_scores.append(macro_f1)
-        weighted_scores.append(weight_f1)
+        # per-class F1 bookkeeping
+        for p, f1v in {n: f1_score(yte == c, preds == c, average="binary", zero_division=0)
+                       for c, n in enumerate(le.classes_)}.items():
+            pid_hist[p].append(f1v)
+        macro.append(   f1_score(yte, preds, average="macro") )
+        weighted.append(f1_score(yte, preds, average="weighted"))
 
         y_true_all.extend(yte)
         y_pred_all.extend(preds)
 
-        print(f"  macro F1: {macro_f1:.3f}   weighted F1: {weight_f1:.3f}   time: {now()-t0:.2f}s")
+        print("  macro-F1:", f"{macro[-1]:.3f}",
+              "weighted-F1:", f"{weighted[-1]:.3f}",
+              "time:", f"{now()-t0:.2f}s")
 
-    # ── build and print tables ───────────────────────────────────────────────
-    pid_df = pd.DataFrame(pid_history, index=FOLD_NAMES).T
+    # ── feature importance by fold ──────────────────────────────────────────
+    imp_matrix          = pd.DataFrame(importances, columns=FEATURES, index=FOLD_NAMES).T
+    imp_matrix["Mean"]  = imp_matrix.mean(axis=1)
+
+    pd.options.display.float_format = "{:6.3f}".format
+    print("\n=== Random-Forest feature importance by fold ===")
+    print(imp_matrix.to_string())
+
+    # ── per-participant F1 table ────────────────────────────────────────────
+    pid_df = pd.DataFrame(pid_hist, index=FOLD_NAMES).T
     pid_df["Mean"] = pid_df.mean(axis=1)
 
-    overall_df = pd.DataFrame([macro_scores, weighted_scores],
-                              index=["Macro", "Weighted"],
+    overall_df = pd.DataFrame([macro, weighted],
+                              index=["Macro-F1", "Weighted-F1"],
                               columns=FOLD_NAMES)
     overall_df["Mean"] = overall_df.mean(axis=1)
 
-    pd.options.display.float_format = "{:6.3f}".format
-    print("\n=== Per-participant F1 (rows) × Fold (columns) ===")
+    print("\n=== Per-participant F1 by fold ===")
     print(pid_df.to_string())
-
-    print("\n=== Overall F1 scores ===")
+    print("\n=== Overall macro / weighted F1 ===")
     print(overall_df.to_string())
 
-    # ── confusion-matrix plot ────────────────────────────────────────────────
-    
-    cm = confusion_matrix(y_true_all, y_pred_all, labels=range(len(le.classes_)))
-    disp = ConfusionMatrixDisplay(cm, display_labels=le.classes_)
+    # ── per-class Precision / Recall / F1 ───────────────────────────────────
+    prec = precision_score(y_true_all, y_pred_all, average=None, labels=range(len(le.classes_)))
+    rec  = recall_score   (y_true_all, y_pred_all, average=None, labels=range(len(le.classes_)))
+    f1s  = f1_score       (y_true_all, y_pred_all, average=None, labels=range(len(le.classes_)))
+    pr_df = pd.DataFrame({"Precision": prec, "Recall": rec, "F1": f1s},
+                         index=le.classes_).round(3)
 
+    print("\n=== Per-class Precision / Recall / F1 ===")
+    print(pr_df.to_string())
+
+    # overall macro metrics
+    print("\nOverall macro Precision :", f"{precision_score(y_true_all, y_pred_all, average='macro'):.3f}")
+    print("Overall macro Recall    :", f"{recall_score   (y_true_all, y_pred_all, average='macro'):.3f}")
+    print("Overall macro F1        :", f"{f1_score       (y_true_all, y_pred_all, average='macro'):.3f}")
+
+    # ── confusion matrix (counts) ───────────────────────────────────────────
+    cm = confusion_matrix(y_true_all, y_pred_all, labels=range(len(le.classes_)))
     fig, ax = plt.subplots(figsize=(9, 9))
-    disp.plot(ax=ax, cmap="Blues", colorbar=False, values_format=".0f")
+    ConfusionMatrixDisplay(cm, display_labels=le.classes_).plot(
+        ax=ax, cmap="Blues", colorbar=False, values_format=".0f")
     plt.xticks(rotation=45, ha="right")
-    plt.title("Random-Forest confusion matrix (all 5 folds combined)")
+    plt.title("Random-Forest confusion matrix (5-fold pooled)")
     plt.tight_layout()
     plt.show()
 

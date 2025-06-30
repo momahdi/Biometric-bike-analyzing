@@ -96,7 +96,8 @@ def best_shift(a_lat,a_lon,ref_lat,ref_lon):
 # ---------- centre-line refinement (iterative KNN) ---------------------
 def refine_path(init_lat, init_lon, cloud_lat, cloud_lon,
                 k_neigh, iterations):
-    tree=cKDTree(np.c_[*to_xy(cloud_lat,cloud_lon)])
+    x, y = to_xy(cloud_lat, cloud_lon)
+    tree = cKDTree(np.c_[x, y])
     lat,lon=init_lat.copy(),init_lon.copy()
     for _ in range(iterations):
         x,y=to_xy(lat,lon)

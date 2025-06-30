@@ -24,7 +24,7 @@ from pathlib import Path
 import argparse
 import sys
 
-PATTERNS = ("cadence.json", "cadence.png")   # lower-case for `.endswith`
+PATTERNS = ("cadence.json", "cadence.png", "Cadence.json", "removed")   # lower-case for `.endswith`
 
 def main(argv=None):
     parser = argparse.ArgumentParser(

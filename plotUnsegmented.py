@@ -87,7 +87,7 @@ def process_all_laps(base_dir: Path) -> None:
                 if not participant_path.is_dir():
                     continue
 
-                for json_file in participant_path.glob("*.json"):
+                for json_file in participant_path.glob("*Cadence.json"):
                     plot_dir = participant_path / "plot"
                     output_file = plot_dir / f"{json_file.stem}_map.html"
                     plot_lap(json_file, output_file)

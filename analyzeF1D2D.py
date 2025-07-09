@@ -1,20 +1,19 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Rider-ID — Day-split experiment
-──────────────────────────────
-• Train on 5 laps from Day 1
-• Test  on 5 laps from Day 2
-• Random-Forest classifier
-• Confusion-matrix plot
-• Per-class Precision / Recall / F1
-• Feature importances
+Rider‑ID — Day‑split experiment (one file per day)
+================================================
+
+• Train on **one** `*Cadence.removed.json` per åkare från *Day1*
+• Test  on motsvarande fil från *Day2*
+• Random‑Forest + median imputation
+• 25‑feature vektor (broms, accel, kadens, power‑surrogat, orientering, gyro, magnet, quaternion, altitude)
+• Skriver full feature‑importance, per‑klass PRF, makro‑scores,
+  top‑guess‑tabell & confusion‑matrix
 """
 
 import json
-import time
 from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -22,186 +21,152 @@ import matplotlib.pyplot as plt
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
-    confusion_matrix,
-    ConfusionMatrixDisplay,
-    f1_score,
-    precision_score,
-    recall_score,
+    confusion_matrix, ConfusionMatrixDisplay,
+    precision_score, recall_score, f1_score,
 )
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import LabelEncoder
 
-
-# ─────────────────── stopwatch ──────────────────────────────────────────────
-def now() -> float:
-    """Return elapsed seconds since first call."""
-    if not hasattr(now, "_t0"):
-        now._t0 = time.perf_counter()
-    return time.perf_counter() - now._t0
-
-
-# ─────────────────── configuration ──────────────────────────────────────────
-ROOT_DIR   = Path("./Segmented")   # root data folder
-TRAIN_DAY  = "Day1"                # sub-folder used for training
-TEST_DAY   = "Day2"                # sub-folder used for testing
-
+# ───────── config ────────────────────────────────────────────────────────
+ROOT_DIR   = Path("./Unsegmented")
+TRAIN_DAY  = "Day1"
+TEST_DAY   = "Day2"
 PARTICIPANTS = [
     "P01", "P02", "P03", "P04", "P05", "P06", "P07",
     "P09", "P10", "P11", "P12", "P13", "P14", "P15", "P16",
-] # P01…P15
-LAPS         = range(1, 6)                                   # laps 1-5
-
-FEATURES = [
-    "brake_value",
-    "accel_x", "accel_y", "accel_z",
-    "accel_mag",
 ]
 
+FEATURES = [
+    "brake_value", "accel_x", "accel_y", "accel_z", "accel_mag",
+    "cadence", "phone_cadence", "velocity", "pedal_L", "pedal_R", "power_surrogate",
+    "roll", "pitch", "yaw",
+    "gyro_x", "gyro_y", "gyro_z",
+    "mag_x", "mag_y", "mag_z",
+    "quat_x", "quat_y", "quat_z", "quat_w",
+    "altitude",
+]
 
-# ─────────────────── helpers ────────────────────────────────────────────────
-def to_float(x):
-    """Convert value to float, NaN on failure."""
+# ───────── helpers ────────────────────────────────────────────────────────
+
+def f(x):
     try:
         return float(x)
     except Exception:
         return np.nan
 
 
-def load_lap_json(day: str, pid: str, lap: int):
-    """Load one lap JSON file."""
-    with open(ROOT_DIR / day / pid / f"lap_{lap}.json") as f:
-        return json.load(f)
+def find_cadence_file(day: str, pid: str) -> Path:
+    """Return the *single* Cadence.removed.json we care about.
+    • Ignorerar filer som ligger i en underkatalog som heter "plot".
+    • Om flera ändå återstår – välj den med senaste mtime.
+    """
+    day_dir = ROOT_DIR / day
+    all_matches = [p for p in day_dir.rglob(f"*{pid}*.Cadence.removed.json")
+                   if "plot" not in {parent.name for parent in p.parents}]
+    if not all_matches:
+        raise FileNotFoundError(f"No Cadence.removed.json for {pid} in {day}")
+    if len(all_matches) > 1:
+        # pick newest file
+        all_matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return all_matches[0]
 
 
-def lap_to_df(lap_data, pid):
-    """Flatten one lap (brake + accel) to a DataFrame row set."""
+def load_rider_day(day: str, pid: str):
+    with open(find_cadence_file(day, pid)) as fh:
+        return json.load(fh)
+
+
+def to_df(recs: list, pid: str) -> pd.DataFrame:
     rows = []
-    for d in lap_data:
-        acc = d.get("userAccel") or d.get("acceleration") or {}
-        ax, ay, az = map(to_float, (acc.get("x"), acc.get("y"), acc.get("z")))
-        rows.append(
-            dict(
-                brake_value=to_float(d.get("brakeData")),
-                accel_x=ax,
-                accel_y=ay,
-                accel_z=az,
-                accel_mag=(
-                    np.sqrt(ax ** 2 + ay ** 2 + az ** 2)
-                    if not np.isnan(ax) and not np.isnan(ay) and not np.isnan(az)
-                    else np.nan
-                ),
-                participant_id=pid,
-            )
-        )
+    for d in recs:
+        acc  = d.get("userAccel") or d.get("acceleration") or {}
+        ax, ay, az = map(f, (acc.get("x"), acc.get("y"), acc.get("z")))
+        accel_mag = np.sqrt(ax**2 + ay**2 + az**2) if not any(np.isnan([ax, ay, az])) else np.nan
+        rot  = d.get("rotationRate", {})
+        mag  = d.get("magneticField", {})
+        quat = d.get("quaternion",    {})
+        ped  = d.get("pedalWeight",   {})
+        cadence   = f(d.get("cadence"))
+        pedal_sum = f(ped.get("L")) + f(ped.get("R"))
+        power = cadence * pedal_sum if not np.isnan(cadence) and not np.isnan(pedal_sum) else np.nan
+        rows.append(dict(
+            brake_value=f(d.get("brakeData")),
+            accel_x=ax, accel_y=ay, accel_z=az, accel_mag=accel_mag,
+            cadence=cadence, phone_cadence=f(d.get("phoneCadence")),
+            velocity=f(d.get("locationData", {}).get("velocity")),
+            pedal_L=f(ped.get("L")), pedal_R=f(ped.get("R")), power_surrogate=power,
+            roll=f(d.get("roll")), pitch=f(d.get("pitch")), yaw=f(d.get("yaw")),
+            gyro_x=f(rot.get("x")), gyro_y=f(rot.get("y")), gyro_z=f(rot.get("z")),
+            mag_x=f(mag.get("x")),  mag_y=f(mag.get("y")),  mag_z=f(mag.get("z")),
+            quat_x=f(quat.get("x")), quat_y=f(quat.get("y")), quat_z=f(quat.get("z")), quat_w=f(quat.get("w")),
+            altitude=f(d.get("locationData", {}).get("altitude")),
+            participant_id=pid,
+        ))
     return pd.DataFrame(rows)
 
 
-def build_day_split(train_day: str, test_day: str):
-    """Create train/test DataFrames for the two-day split."""
+def build_split():
     tr, te = [], []
     for pid in PARTICIPANTS:
-        for lp in LAPS:
-            tr.append(lap_to_df(load_lap_json(train_day, pid, lp), pid))
-            te.append(lap_to_df(load_lap_json(test_day, pid, lp), pid))
-    return (
-        pd.concat(tr, ignore_index=True),
-        pd.concat(te, ignore_index=True),
-    )
+        tr.append(to_df(load_rider_day(TRAIN_DAY, pid)["timestamps"], pid))
+        te.append(to_df(load_rider_day(TEST_DAY,  pid)["timestamps"], pid))
+    return pd.concat(tr, ignore_index=True), pd.concat(te, ignore_index=True)
 
+# ───────── main ──────────────────────────────────────────────────────────
 
-def encode(tr_df, te_df):
-    """Label-encode participant IDs into numeric codes."""
-    le = LabelEncoder().fit(tr_df["participant_id"])
-    tr_df["pid_code"] = le.transform(tr_df["participant_id"])
-    te_df["pid_code"] = le.transform(te_df["participant_id"])
-    return tr_df, te_df, le
-
-
-def fit_rf(X, y):
-    """Random-Forest pipeline (median imputation → RF)."""
-    rf = RandomForestClassifier(
-        n_estimators=300, n_jobs=-1, random_state=42
-    )
-    return make_pipeline(SimpleImputer(strategy="median"), rf).fit(X, y)
-
-
-# ─────────────────── main ───────────────────────────────────────────────────
 def main():
-    print(f"[{now():6.2f}s] ===== START =====")
-    print("Features used:", FEATURES)
-    print(f"Train day: {TRAIN_DAY}  ·  Test day: {TEST_DAY}")
+    print("Running Day‑split RF with", len(FEATURES), "features …")
 
-    # ── assemble data ───────────────────────────────────────────────────────
-    tr_df, te_df = build_day_split(TRAIN_DAY, TEST_DAY)
-    tr_df, te_df, le = encode(tr_df, te_df)
+    tr_df, te_df = build_split()
+    le = LabelEncoder().fit(tr_df["participant_id"])
+    tr_df["y"], te_df["y"] = le.transform(tr_df["participant_id"]), le.transform(te_df["participant_id"])
 
-    Xtr, ytr = tr_df[FEATURES].astype(float), tr_df["pid_code"]
-    Xte, yte = te_df[FEATURES].astype(float), te_df["pid_code"]
+    Xtr, ytr = tr_df[FEATURES].astype(float), tr_df["y"]
+    Xte, yte = te_df[FEATURES].astype(float), te_df["y"]
 
-    # ── fit & predict ───────────────────────────────────────────────────────
-    t0 = now()
-    model = fit_rf(Xtr, ytr)
+    model = make_pipeline(SimpleImputer(strategy="median"),
+                          RandomForestClassifier(n_estimators=400, n_jobs=-1, random_state=42))
+    model.fit(Xtr, ytr)
     preds = model.predict(Xte)
-    print(f"[{now():6.2f}s] model trained & evaluated  (Δ {now()-t0:.2f}s)")
 
-    # ── feature importances ─────────────────────────────────────────────────
-    rf_imp = model.named_steps["randomforestclassifier"].feature_importances_
-    print("\n=== Random-Forest feature importance ===")
-    print(pd.Series(rf_imp, index=FEATURES).round(3).to_string())
+    # feature importances
+    rf = model.named_steps["randomforestclassifier"]
+    fi_raw = dict(zip(Xtr.columns[: len(rf.feature_importances_)], rf.feature_importances_))
+    fi = pd.Series({f: fi_raw.get(f, 0.0) for f in FEATURES}).sort_values(ascending=False)
+    print("\n=== RF feature importance ===\n", fi.round(3).to_string())
 
-    # ── per-class Precision / Recall / F1 ───────────────────────────────────
-    prec = precision_score(
-        yte, preds, average=None, labels=range(len(le.classes_))
-    )
-    rec = recall_score(
-        yte, preds, average=None, labels=range(len(le.classes_))
-    )
-    f1s = f1_score(
-        yte, preds, average=None, labels=range(len(le.classes_))
-    )
-    pr_df = pd.DataFrame(
-        {"Precision": prec, "Recall": rec, "F1": f1s},
-        index=le.classes_,
-    ).round(3)
+    # macro metrics
+    print("\nMacro  P:{:.3f} R:{:.3f} F1:{:.3f}".format(
+        precision_score(yte, preds, average="macro"),
+        recall_score   (yte, preds, average="macro"),
+        f1_score       (yte, preds, average="macro")
+    ))
 
-    print("\n=== Per-participant Precision / Recall / F1 ===")
-    print(pr_df.to_string())
+    # per-class table
+    per_cls = pd.DataFrame({
+        "Precision": precision_score(yte, preds, average=None),
+        "Recall":    recall_score   (yte, preds, average=None),
+        "F1":        f1_score       (yte, preds, average=None),
+    }, index=le.classes_).round(3)
+    print("\n=== Per‑class PRF ===\n", per_cls.to_string())
 
-    # ── overall macro metrics ───────────────────────────────────────────────
-    print(
-        "\nOverall macro Precision :",
-        f"{precision_score(yte, preds, average='macro'):.3f}",
-    )
-    print(
-        "Overall macro Recall    :",
-        f"{recall_score(yte, preds, average='macro'):.3f}",
-    )
-    print(
-        "Overall macro F1        :",
-        f"{f1_score(yte, preds, average='macro'):.3f}",
-    )
+    # top wrong guess
+    cm = confusion_matrix(yte, preds)
+    off = cm.copy(); np.fill_diagonal(off, 0)
+    top = off.argmax(axis=1)
+    tbl = pd.DataFrame({
+        "True": le.classes_,
+        "Top guess": [le.classes_[j] for j in top],
+        "Count": off.max(axis=1),
+        "Total": cm.sum(axis=1),
+    })
+    tbl["Pct"] = (tbl["Count"] / tbl["Total"]).round(3)
+    print("\n=== Top wrong guess per rider ===\n", tbl.to_string(index=False))
 
-    # ── confusion matrix ────────────────────────────────────────────────────
-    cm = confusion_matrix(
-        yte, preds, labels=range(len(le.classes_))
-    )
-    fig, ax = plt.subplots(figsize=(9, 9))
-    ConfusionMatrixDisplay(
-        cm, display_labels=le.classes_
-    ).plot(
-        ax=ax,
-        cmap="Blues",
-        colorbar=False,
-        values_format=".0f",
-    )
-    plt.xticks(rotation=45, ha="right")
-    plt.title(
-        f"Random-Forest confusion matrix\nTrain {TRAIN_DAY} → Test {TEST_DAY}"
-    )
-    plt.tight_layout()
-    plt.show()
-
-    print(f"\n[{now():6.2f}s] ===== FINISHED =====")
+    # plot
+    fig, ax = plt.subplots(figsize=(10, 9))
+    ConfusionMatrixDisplay(cm, display_labels=le.classes_).plot(ax=ax, cmap="Blues", colorbar=False, values_format=".0f")
+    plt.xticks(rotation=45, ha="right"); plt.title(f"RF confusion matrix  |  {TRAIN_DAY} → {TEST_DAY}"); plt.tight_layout(); plt.show()
 
 
 if __name__ == "__main__":

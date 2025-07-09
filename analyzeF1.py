@@ -60,7 +60,7 @@ def to_float(x):
 
 
 def load_lap_json(pid: str, lap: int):
-    with open(BASE_DIR / pid / f"lap_{lap}.json") as f:
+    with open(BASE_DIR / pid / f"lap_{lap}removed.json") as f:
         return json.load(f)
 
 

@@ -222,7 +222,7 @@ def main():
             root = BASE_DIR / day / track
             if not root.is_dir(): continue
             for pdir in root.glob("P*"):
-                for jf in pdir.glob("*.json"):
+                for jf in pdir.glob("*.Cadence.json"):
                     process(jf, track)
 
 if __name__ == "__main__":

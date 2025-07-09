@@ -18,16 +18,30 @@ from pyproj import Transformer
 from scipy.interpolate import interp1d
 from scipy.signal import medfilt
 
+# ---------------------------------------------------------------------
+# A GPS point is **kept** only if it meets **all** of these criteria:
+#
+# 1.  Not NaN                 – latitude & longitude must be present.
+# 2.  Close to centerline     – distance ≤ MAX_DIST_M.
+# 3.  Reasonable movement     – both:
+#       • jump to previous/next point ≤ JUMP_M, and
+#       • speed ≤ SPEED_MPS.
+# 4.  Not a Hampel outlier    – X or Y is within
+#       HAMPEL_SIGMA × MAD in a window of HAMPEL_WIN points.
+# 5.  Edge rule               – the first and last point that pass #2
+#       are always kept, even if they violate #3–#4.
+# ---------------------------------------------------------------------
+
 # ─── CONFIG ────────────────────────────────────────────────────────────
 BASE_DIR      = Path("Unsegmented")
 DAYS          = ["Day1", "Day2"]
 TRACKS        = ["Track-A", "Track-B"]
 
-MAX_DIST_M    = 5.0
-JUMP_M        = 15.0
-SPEED_MPS     = 10.0
-HAMPEL_WIN, HAMPEL_SIGMA = 11, 3.0
-MEDFILT_WIN   = 7
+MAX_DIST_M    = 11.0
+JUMP_M        = 27.0
+SPEED_MPS     = 17.0
+HAMPEL_WIN, HAMPEL_SIGMA = 9, 5.0
+MEDFILT_WIN   = 5
 ZOOM_START    = 16
 FILL_TIME     = True
 # ────────────────────────────────────────────────────────────────────────

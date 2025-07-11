@@ -10,9 +10,10 @@ import folium
 # ────────────────────────────────────────────────────────────────────────────
 # Configuration – adjust only if your folder names change
 # ────────────────────────────────────────────────────────────────────────────
-SEGMENTED_ROOT = Path("./Segmented/Day1")  # where P01 … P15 live
-PARTICIPANTS = [p for p in range(1, 17) if p != 8]     # P01 … P16
-LAP_PATTERN    = "lap_*.json"         # match all lap files
+SEGMENTED_ROOT = Path(".././Segmented/Day1")  # where P01 … P15 live
+PARTICIPANTS = [p for p in range(1, 17) if p != 8]  # P01 … P16
+LAP_PATTERN = "lap_*.json"  # match all lap files
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # Plotting helper (your original function with one print-line tweak)
@@ -22,7 +23,7 @@ def plot_lap(file_path: Path, output_file: Path) -> None:
         lap_data = json.load(file)
 
     # Extract latitude and longitude
-    latitudes  = [float(e["locationData"]["latitude"])  for e in lap_data]
+    latitudes = [float(e["locationData"]["latitude"]) for e in lap_data]
     longitudes = [float(e["locationData"]["longitude"]) for e in lap_data]
 
     # Create a map centred around the starting point
@@ -65,12 +66,13 @@ def plot_lap(file_path: Path, output_file: Path) -> None:
     # ——— fixed: always print a usable path on any OS ———
     print(f"    ✓ map saved → {output_file.resolve()}")
 
+
 # ────────────────────────────────────────────────────────────────────────────
 # Batch loop
 # ────────────────────────────────────────────────────────────────────────────
 def main() -> None:
     for n in PARTICIPANTS:
-        pid      = f"P{n:02d}"
+        pid = f"P{n:02d}"
         laps_dir = SEGMENTED_ROOT / pid
         plot_dir = laps_dir / "plot"
         plot_dir.mkdir(parents=True, exist_ok=True)
@@ -87,6 +89,7 @@ def main() -> None:
             plot_lap(lap_path, out_html)
 
     print("\n✓ All laps plotted.")
+
 
 if __name__ == "__main__":
     main()

@@ -174,7 +174,7 @@ def _save_laps(laps: List[Lap], directory: Path) -> None:
 # helper unchanged
 def _first_json(directory: Path) -> Path | None:
     for child in sorted(directory.iterdir()):
-        if child.suffix.lower() == ".json":
+        if child.name.lower().endswith(".removed.json"):
             return child
     return None
 

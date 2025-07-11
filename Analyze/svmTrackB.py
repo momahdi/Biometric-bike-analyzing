@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Five-fold rider‑ID model — 25‑feature RF
-=======================================
-Fixed: accommodates folds where RF drops columns (len(importances) < 25)
-by padding the importance vector to full feature length.
+Five‑fold rider‑ID model — 25‑feature linear‑SVM
+================================================
+Same structure as the Random‑Forest version but with a LinearSVC.
+Feature‑importance reporting has been removed because SVMs do not
+have native feature‑importance scores (you can inspect the linear
+coefficients separately if needed).
 """
 
 import json, time
@@ -13,7 +15,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import LinearSVC
 from sklearn.metrics import (
     precision_score,
     recall_score,
@@ -21,7 +23,7 @@ from sklearn.metrics import (
     confusion_matrix,
     ConfusionMatrixDisplay,
 )
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import make_pipeline
 
@@ -179,10 +181,12 @@ def encode(tr, te):
     return tr, te, le
 
 
-def rf_pipe():
+def svm_pipe():
+    """Median‑impute, scale, then LinearSVC."""
     return make_pipeline(
         SimpleImputer(strategy="median"),
-        RandomForestClassifier(n_estimators=300, n_jobs=-1, random_state=42),
+        StandardScaler(),
+        LinearSVC(C=1.0, class_weight="balanced", random_state=42, dual=False),
     )
 
 
@@ -191,9 +195,8 @@ def rf_pipe():
 
 def main():
     print(f"[{now():5.2f}s] START")
-    pid_hist, macro, weighted, y_true_all, y_pred_all, importances = (
+    pid_hist, macro, weighted, y_true_all, y_pred_all = (
         {p: [] for p in PARTICIPANTS},
-        [],
         [],
         [],
         [],
@@ -209,16 +212,8 @@ def main():
             te_df[FEATURES].astype(float),
             te_df["y"],
         )
-        model = rf_pipe().fit(Xtr, ytr)
+        model = svm_pipe().fit(Xtr, ytr)
         preds = model.predict(Xte)
-        # importance vector padded to 25
-        imp = pd.Series(
-            model.named_steps["randomforestclassifier"].feature_importances_,
-            index=FEATURES[
-                : len(model.named_steps["randomforestclassifier"].feature_importances_)
-            ],
-        ).reindex(FEATURES, fill_value=0.0)
-        importances.append(imp.values)
         for pid, f1v in {
             n: f1_score(yte == i, preds == i, average="binary", zero_division=0)
             for i, n in enumerate(le.classes_)
@@ -229,9 +224,6 @@ def main():
         y_true_all.extend(yte)
         y_pred_all.extend(preds)
         print("  macro-F1", f"{macro[-1]:.3f}")
-    imp_df = pd.DataFrame(importances, columns=FEATURES, index=FOLD_NAMES).T
-    imp_df["Mean"] = imp_df.mean(axis=1)
-    print("\n=== RF feature importance by fold ===\n", imp_df.to_string())
     pid_df = pd.DataFrame(pid_hist, index=FOLD_NAMES).T
     pid_df["Mean"] = pid_df.mean(axis=1)
     overall = pd.DataFrame(
@@ -261,7 +253,7 @@ def main():
         ax=ax, cmap="Blues", colorbar=False, values_format=".0f"
     )
     plt.xticks(rotation=45, ha="right")
-    plt.title(f"Random-Forest confusion matrix |  Track B {DAY} - 5 Laps on same day ")
+    plt.title(f"Linear‑SVM confusion matrix |  Track B {DAY} - 5 Laps on same day ")
     plt.tight_layout()
     plt.show()
 

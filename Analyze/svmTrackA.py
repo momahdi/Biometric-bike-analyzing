@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Rider‑ID — Day‑split experiment (one file per day)
-================================================
-
-• Train on **one** `*Cadence.removed.json` per åkare från *Day1*
-• Test  on motsvarande fil från *Day2*
-• Random‑Forest + median imputation
-• 25‑feature vektor (broms, accel, kadens, power‑surrogat, orientering, gyro, magnet, quaternion, altitude)
-• Skriver full feature‑importance, per‑klass PRF, makro‑scores,
-  top‑guess‑tabell & confusion‑matrix
-"""
 
 import json
 from pathlib import Path
@@ -18,17 +7,17 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import (
     confusion_matrix, ConfusionMatrixDisplay,
     precision_score, recall_score, f1_score,
 )
 from sklearn.pipeline import make_pipeline
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.svm import LinearSVC
 
 # ───────── config ────────────────────────────────────────────────────────
-ROOT_DIR   = Path("./Unsegmented")
+ROOT_DIR   = Path(".././Unsegmented")
 TRAIN_DAY  = "Day1"
 TEST_DAY   = "Day2"
 PARTICIPANTS = [
@@ -66,7 +55,6 @@ def find_cadence_file(day: str, pid: str) -> Path:
     if not all_matches:
         raise FileNotFoundError(f"No Cadence.removed.json for {pid} in {day}")
     if len(all_matches) > 1:
-        # pick newest file
         all_matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return all_matches[0]
 
@@ -115,7 +103,7 @@ def build_split():
 # ───────── main ──────────────────────────────────────────────────────────
 
 def main():
-    print("Running Day‑split RF with", len(FEATURES), "features …")
+    print("Running Day-split Linear SVM with", len(FEATURES), "features …")
 
     tr_df, te_df = build_split()
     le = LabelEncoder().fit(tr_df["participant_id"])
@@ -124,16 +112,22 @@ def main():
     Xtr, ytr = tr_df[FEATURES].astype(float), tr_df["y"]
     Xte, yte = te_df[FEATURES].astype(float), te_df["y"]
 
-    model = make_pipeline(SimpleImputer(strategy="median"),
-                          RandomForestClassifier(n_estimators=400, n_jobs=-1, random_state=42))
+    model = make_pipeline(
+        SimpleImputer(strategy="median"),
+        StandardScaler(),
+        LinearSVC(C=1.0, dual=False, random_state=42)
+    )
     model.fit(Xtr, ytr)
     preds = model.predict(Xte)
 
-    # feature importances
-    rf = model.named_steps["randomforestclassifier"]
-    fi_raw = dict(zip(Xtr.columns[: len(rf.feature_importances_)], rf.feature_importances_))
-    fi = pd.Series({f: fi_raw.get(f, 0.0) for f in FEATURES}).sort_values(ascending=False)
-    print("\n=== RF feature importance ===\n", fi.round(3).to_string())
+    # feature weights (|coef|) averaged over classes
+    svc = model.named_steps["linearsvc"]
+    if hasattr(svc, "coef_"):
+        weights = np.mean(np.abs(svc.coef_), axis=0)
+        fi = pd.Series(weights, index=Xtr.columns).sort_values(ascending=False)
+        print("\n=== SVM feature weights ===\n", fi.round(3).to_string())
+    else:
+        print("\n(No feature weights available for this SVM kernel)")
 
     # macro metrics
     print("\nMacro  P:{:.3f} R:{:.3f} F1:{:.3f}".format(
@@ -148,7 +142,7 @@ def main():
         "Recall":    recall_score   (yte, preds, average=None),
         "F1":        f1_score       (yte, preds, average=None),
     }, index=le.classes_).round(3)
-    print("\n=== Per‑class PRF ===\n", per_cls.to_string())
+    print("\n=== Per-class PRF ===\n", per_cls.to_string())
 
     # top wrong guess
     cm = confusion_matrix(yte, preds)
@@ -166,7 +160,7 @@ def main():
     # plot
     fig, ax = plt.subplots(figsize=(10, 9))
     ConfusionMatrixDisplay(cm, display_labels=le.classes_).plot(ax=ax, cmap="Blues", colorbar=False, values_format=".0f")
-    plt.xticks(rotation=45, ha="right"); plt.title(f"RF confusion matrix  |  {TRAIN_DAY} → {TEST_DAY}"); plt.tight_layout(); plt.show()
+    plt.xticks(rotation=45, ha="right"); plt.title(f"Linear SVM confusion matrix - Track A  |  {TRAIN_DAY} → {TEST_DAY}"); plt.tight_layout(); plt.show()
 
 
 if __name__ == "__main__":
